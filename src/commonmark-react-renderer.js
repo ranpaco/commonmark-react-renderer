@@ -12,7 +12,12 @@ var typeAliases = {
     htmlblock: 'html_block',
     htmlinline: 'html_inline',
     codeblock: 'code_block',
-    hardbreak: 'linebreak'
+    hardbreak: 'linebreak',
+    atmention: 'at_mention',
+    channellink: 'channel_link',
+    editedindicator: 'edited_indicator',
+    tableRow: 'table_row',
+    tableCell: 'table_cell'
 };
 
 var defaultRenderers = {
@@ -24,6 +29,7 @@ var defaultRenderers = {
     link: 'a',
     paragraph: 'p',
     strong: 'strong',
+    del: 'del',
     thematic_break: 'hr', // eslint-disable-line camelcase
 
     html_block: HtmlRenderer, // eslint-disable-line camelcase
@@ -52,7 +58,71 @@ var defaultRenderers = {
     },
 
     text: null,
-    softbreak: null
+    softbreak: null,
+
+    at_mention: function AtMention(props) {
+        var newProps = getCoreProps(props);
+        if (props.username) {
+            props['data-mention-name'] = props.username;
+        }
+
+        return createElement('span', newProps, props.children);
+    },
+    channel_link: function ChannelLink(props) {
+        var newProps = getCoreProps(props);
+        if (props.channelName) {
+            props['data-channel-name'] = props.channelName;
+        }
+
+        return createElement('span', newProps, props.children);
+    },
+    emoji: function Emoji(props) {
+        var newProps = getCoreProps(props);
+        if (props.emojiName) {
+            props['data-emoji-name'] = props.emojiName;
+        }
+
+        return createElement('span', newProps, props.children);
+    },
+    edited_indicator: null,
+    hashtag: function Hashtag(props) {
+        var newProps = getCoreProps(props);
+        if (props.hashtag) {
+            props['data-hashtag'] = props.hashtag;
+        }
+
+        return createElement('span', newProps, props.children);
+    },
+    mention_highlight: function MentionHighlight(props) {
+        var newProps = getCoreProps(props);
+        newProps['data-mention-highlight'] = 'true';
+        return createElement('span', newProps, props.children);
+    },
+    search_highlight: function SearchHighlight(props) {
+        var newProps = getCoreProps(props);
+        newProps['data-search-highlight'] = 'true';
+        return createElement('span', newProps, props.children);
+    },
+
+    table: function Table(props) {
+        var childrenArray = React.Children.toArray(props.children);
+
+        var children = [createElement('thead', {'key': 'thead'}, childrenArray.slice(0, 1))];
+        if (childrenArray.length > 1) {
+            children.push(createElement('tbody', {'key': 'tbody'}, childrenArray.slice(1)));
+        }
+
+        return createElement('table', getCoreProps(props), children);
+    },
+    table_row: 'tr',
+    table_cell: function TableCell(props) {
+        var newProps = getCoreProps(props);
+        if (props.align) {
+            newProps.className = 'align-' + props.align;
+        }
+
+        return createElement('td', newProps, props.children);
+    }
 };
 
 var coreTypes = Object.keys(defaultRenderers);
@@ -133,7 +203,7 @@ function flattenPosition(pos) {
 }
 
 // For some nodes, we want to include more props than for others
-function getNodeProps(node, key, opts, renderer) {
+function getNodeProps(node, key, opts, renderer, context) {
     var props = { key: key }, undef;
 
     // `sourcePos` is true if the user wants source information (line/column info from markdown source)
@@ -180,14 +250,47 @@ function getNodeProps(node, key, opts, renderer) {
 
             // Commonmark treats image description as children. We just want the text
             props.alt = node.react.children.join('');
-            node.react.children = undef;
             break;
         case 'list':
             props.start = node.listStart;
             props.type = node.listType;
             props.tight = node.listTight;
             break;
+        case 'at_mention':
+            props.mentionName = node.mentionName;
+            break;
+        case 'channel_link':
+            props.channelName = node.channelName;
+            break;
+        case 'emoji':
+            props.emojiName = node.emojiName;
+            props.literal = node.literal;
+            break;
+        case 'hashtag':
+            props.hashtag = node.hashtag;
+            break;
+        case 'paragraph':
+            props.first = !(node._prev && node._prev.type === 'paragraph');
+            props.last = !(node._next && node._next.type === 'paragraph');
+            break;
+        case 'edited_indicator':
+            break;
+        case 'table':
+            props.numRows = countRows(node);
+            props.numColumns = countColumns(node);
+            break;
+        case 'table_row':
+            props.isHeading = node.isHeading;
+            break;
+        case 'table_cell':
+            props.isHeading = node.isHeading;
+            props.align = node.align;
+            break;
         default:
+    }
+
+    if (opts.getExtraPropsForNode) {
+        props = Object.assign(props, opts.getExtraPropsForNode(node));
     }
 
     if (typeof renderer !== 'string') {
@@ -199,7 +302,27 @@ function getNodeProps(node, key, opts, renderer) {
         props.children = children.reduce(reduceChildren, []) || null;
     }
 
+    props.context = context.slice();
+
     return props;
+}
+
+function countChildren(node) {
+    var count = 0;
+
+    for (var child = node.firstChild; child; child = child.next) {
+        count += 1;
+    }
+
+    return count;
+}
+
+function countRows(table) {
+    return countChildren(table);
+}
+
+function countColumns(table) {
+    return countChildren(table.firstChild);
 }
 
 function getPosition(node) {
@@ -217,33 +340,37 @@ function getPosition(node) {
 function renderNodes(block) {
     var walker = block.walker();
 
+    // Softbreaks are usually treated as newlines, but in HTML we might want explicit linebreaks
+    var softBreak = (
+        this.softBreak === 'br' ?
+        React.createElement('br') :
+        this.softBreak
+    );
+
     var propOptions = {
         sourcePos: this.sourcePos,
         escapeHtml: this.escapeHtml,
         skipHtml: this.skipHtml,
         transformLinkUri: this.transformLinkUri,
         transformImageUri: this.transformImageUri,
-        softBreak: this.softBreak,
-        linkTarget: this.linkTarget
+        softBreak: softBreak,
+        linkTarget: this.linkTarget,
+        getExtraPropsForNode: this.getExtraPropsForNode
     };
 
-    var e, node, entering, leaving, type, doc, key, nodeProps, prevPos, prevIndex = 0;
+    var e;
+    var doc;
+    var context = [];
+    var index = 0;
     while ((e = walker.next())) {
-        var pos = getPosition(e.node.sourcepos ? e.node : e.node.parent);
-        if (prevPos === pos) {
-            key = pos + prevIndex;
-            prevIndex++;
-        } else {
-            key = pos;
-            prevIndex = 0;
-        }
+        var key = String(index);
+        index += 1;
 
-        prevPos = pos;
-        entering = e.entering;
-        leaving = !entering;
-        node = e.node;
-        type = normalizeTypeName(node.type);
-        nodeProps = null;
+        var entering = e.entering;
+        var leaving = !entering;
+        var node = e.node;
+        var type = normalizeTypeName(node.type);
+        var nodeProps = null;
 
         // If we have not assigned a document yet, assume the current node is just that
         if (!doc) {
@@ -256,7 +383,7 @@ function renderNodes(block) {
         }
 
         // In HTML, we don't want paragraphs inside of list items
-        if (type === 'paragraph' && isGrandChildOfList(node)) {
+        if (!this.renderParagraphsInLists && type === 'paragraph' && isGrandChildOfList(node)) {
             continue;
         }
 
@@ -275,13 +402,37 @@ function renderNodes(block) {
         if (this.allowNode && (isCompleteParent || !node.isContainer)) {
             var nodeChildren = isCompleteParent ? node.react.children : [];
 
-            nodeProps = getNodeProps(node, key, propOptions, renderer);
+            nodeProps = getNodeProps(node, key, propOptions, renderer, context);
             disallowedByUser = !this.allowNode({
                 type: pascalCase(type),
                 renderer: this.renderers[type],
                 props: nodeProps,
                 children: nodeChildren
             });
+        }
+
+        if (node.isContainer) {
+            var contextType = node.type;
+            if (node.level) {
+                contextType = node.type + node.level;
+            } else if (node.type === 'table_row' && node.parent.firstChild === node) {
+                contextType = 'table_header_row';
+            } else {
+                contextType = node.type;
+            }
+
+            if (entering) {
+                context.push(contextType);
+            } else {
+                var popped = context.pop();
+
+                if (!popped) {
+                    throw new Error('Attempted to pop empty stack');
+                } else if (!popped === contextType) {
+                    throw new Error('Popped context of type `' + pascalCase(popped) +
+                        '` when expecting context of type `' + pascalCase(contextType) + '`');
+                }
+            }
         }
 
         if (!isDocument && (disallowedByUser || disallowedByConfig)) {
@@ -299,15 +450,23 @@ function renderNodes(block) {
             );
         }
 
-        if (node.isContainer && entering) {
+        if (context.length > this.maxDepth) {
+            // Do nothing, we should not regularly be nested this deeply and we don't want to cause React to
+            // overflow the stack
+        } else if (node.isContainer && entering) {
             node.react = {
                 component: renderer,
                 props: {},
                 children: []
             };
         } else {
-            var childProps = nodeProps || getNodeProps(node, key, propOptions, renderer);
-            if (renderer) {
+            var childProps = nodeProps || getNodeProps(node, key, propOptions, renderer, context);
+            if (renderer === ReactRenderer.forwardChildren) {
+                for (var i = 0; i < childProps.children.length; i++) {
+                    var child = childProps.children[i];
+                    addChild(node, child);
+                }
+            } else if (renderer) {
                 childProps = typeof renderer === 'string'
                     ? childProps
                     : assign(childProps, {nodeKey: childProps.key});
@@ -316,15 +475,13 @@ function renderNodes(block) {
             } else if (type === 'text') {
                 addChild(node, node.literal);
             } else if (type === 'softbreak') {
-                // Softbreaks are usually treated as newlines, but in HTML we might want explicit linebreaks
-                var softBreak = (
-                    this.softBreak === 'br' ?
-                    React.createElement('br', {key: key}) :
-                    this.softBreak
-                );
                 addChild(node, softBreak);
             }
         }
+    }
+
+    if (context.length !== 0) {
+        throw new Error('Expected context to be empty after rendering, but has `' + context.join(', ') + '`');
     }
 
     return doc.react.children;
@@ -387,14 +544,21 @@ function ReactRenderer(options) {
         renderers: assign({}, defaultRenderers, normalizeRenderers(opts.renderers)),
         escapeHtml: Boolean(opts.escapeHtml),
         skipHtml: Boolean(opts.skipHtml),
+        renderParagraphsInLists: Boolean(opts.renderParagraphsInLists),
         transformLinkUri: linkFilter,
         transformImageUri: imageFilter,
         allowNode: opts.allowNode,
         allowedTypes: allowedTypes,
         unwrapDisallowed: Boolean(opts.unwrapDisallowed),
         render: renderNodes,
-        linkTarget: opts.linkTarget || false
+        linkTarget: opts.linkTarget || false,
+        maxDepth: opts.maxDepth || 30,
+        getExtraPropsForNode: opts.getExtraPropsForNode
     };
+}
+
+function forwardChildren(props) {
+    return props.children;
 }
 
 ReactRenderer.uriTransformer = defaultLinkUriFilter;
@@ -403,5 +567,8 @@ ReactRenderer.renderers = coreTypes.reduce(function(renderers, type) {
     renderers[pascalCase(type)] = defaultRenderers[type];
     return renderers;
 }, {});
+ReactRenderer.countRows = countRows;
+ReactRenderer.countColumns = countColumns;
+ReactRenderer.forwardChildren = forwardChildren;
 
 module.exports = ReactRenderer;
