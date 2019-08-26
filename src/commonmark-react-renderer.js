@@ -14,7 +14,6 @@ var typeAliases = {
     codeblock: 'code_block',
     hardbreak: 'linebreak',
     atmention: 'at_mention',
-    channellink: 'channel_link',
     editedindicator: 'edited_indicator',
     tableRow: 'table_row',
     tableCell: 'table_cell'
@@ -64,14 +63,6 @@ var defaultRenderers = {
         var newProps = getCoreProps(props);
         if (props.username) {
             props['data-mention-name'] = props.username;
-        }
-
-        return createElement('span', newProps, props.children);
-    },
-    channel_link: function ChannelLink(props) {
-        var newProps = getCoreProps(props);
-        if (props.channelName) {
-            props['data-channel-name'] = props.channelName;
         }
 
         return createElement('span', newProps, props.children);
@@ -258,9 +249,6 @@ function getNodeProps(node, key, opts, renderer, context) {
             break;
         case 'at_mention':
             props.mentionName = node.mentionName;
-            break;
-        case 'channel_link':
-            props.channelName = node.channelName;
             break;
         case 'emoji':
             props.emojiName = node.emojiName;
