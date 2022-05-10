@@ -14,7 +14,6 @@ var typeAliases = {
     codeblock: 'code_block',
     hardbreak: 'linebreak',
     atmention: 'at_mention',
-    editedindicator: 'edited_indicator',
     tableRow: 'table_row',
     tableCell: 'table_cell'
 };
@@ -75,7 +74,6 @@ var defaultRenderers = {
 
         return createElement('span', newProps, props.children);
     },
-    edited_indicator: null,
     hashtag: function Hashtag(props) {
         var newProps = getCoreProps(props);
         if (props.hashtag) {
@@ -274,8 +272,6 @@ function getNodeProps(node, key, opts, renderer, context) {
         case 'paragraph':
             props.first = !(node._prev && node._prev.type === 'paragraph');
             props.last = !(node._next && node._next.type === 'paragraph');
-            break;
-        case 'edited_indicator':
             break;
         case 'table':
             props.numRows = countRows(node);
